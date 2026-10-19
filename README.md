@@ -37,7 +37,7 @@ dataCount, data}` and add `summary {count, total, page, total_pages, has_more, n
 `accountId` scopes a tool to one customer account; without it the tool covers every account the
 token can see. `dates` filters take `start|end` (ISO dates, either side may be empty; a single date
 means "from that date on"). `sort` takes `field`, `field:asc` or `field:desc`. `pageSize` defaults
-to 25 (the API's own default is 1000), max 1000.
+to 25 (the API's own default is 1000), max 200.
 
 | Tool | Purpose | Parameters (required in **bold**) |
 |---|---|---|

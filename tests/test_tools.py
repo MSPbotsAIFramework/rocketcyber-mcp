@@ -131,3 +131,12 @@ def test_trim_incidents():
     assert len(item["description"]) < 360 and item["description"].endswith("verbose=true for full text]")
     assert item["remediation"] == "short"
     assert item["title"] == long
+
+
+@pytest.mark.parametrize(
+    "name", ["rocketcyber_list_incidents", "rocketcyber_list_events", "rocketcyber_list_agents", "rocketcyber_list_firewalls"]
+)
+def test_page_size_capped_at_200(tools, name):
+    schema = tools[name].inputSchema["properties"]["pageSize"]
+    maxima = [schema.get("maximum")] + [option.get("maximum") for option in schema.get("anyOf", [])]
+    assert 200 in maxima and not any(m and m > 200 for m in maxima)

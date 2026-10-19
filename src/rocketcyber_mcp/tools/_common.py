@@ -42,7 +42,7 @@ AccountId = Annotated[
     Field(description="Only this customer account (see rocketcyber_get_account). Default: every account the key can see."),
 ]
 Page = Annotated[int | None, Field(description="Page number, from 1.", ge=1)]
-PageSize = Annotated[int | None, Field(description=f"Results per page (default {DEFAULT_PAGE_SIZE}, max 1000).", ge=1, le=1000)]
+PageSize = Annotated[int | None, Field(description=f"Results per page (default {DEFAULT_PAGE_SIZE}, max 200).", ge=1, le=200)]
 Sort = Annotated[str | None, Field(description="field or field:asc / field:desc, e.g. createdAt:desc.")]
 Dates = Annotated[
     str | None,
