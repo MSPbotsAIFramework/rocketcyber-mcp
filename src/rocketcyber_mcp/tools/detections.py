@@ -29,6 +29,10 @@ from ._common import (
     Sort,
     compact,
     date_range,
+    field_value,
+    local_filter,
+    matches_exact,
+    matches_substring,
     page_params,
     page_summary,
     run_tool,
@@ -37,6 +41,18 @@ from ._common import (
 # Incident description / remediation can run to several KB each.
 _FREE_TEXT_FIELDS = ("description", "remediation")
 _TEXT_LIMIT = 300
+
+# Response fields the local (returned-page) filters look at, first non-empty wins.
+_INCIDENT_SEVERITY = ("severity", "details.severity")
+_EVENT_TYPE = ("valueType", "eventType", "details.eventType")
+_EVENT_HOSTNAME = ("hostname", "details.hostname", "details.hostName", "details.computerName", "details.deviceName")
+
+
+def _incident_severity(item: dict, wanted: str) -> bool:
+    """Exact match on a severity field; incidents without one match on "<severity> Severity" in the title."""
+    if field_value(item, _INCIDENT_SEVERITY) is not None:
+        return matches_exact(item, _INCIDENT_SEVERITY, wanted)
+    return f"{wanted.strip().lower()} severity" in str(item.get("title") or "").lower()
 
 
 def _trim(text: str) -> str:
@@ -71,6 +87,13 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             str | None, Field(description="Created between start|end (ISO dates, either side may be empty), e.g. 2026-01-01|.")
         ] = None,
         title: Annotated[str | None, Field(description="Title filter; * is a wildcard, e.g. *Office*.")] = None,
+        severity: Annotated[
+            str | None,
+            Field(
+                description="Severity, e.g. high. The API has no severity filter: this filters the returned page "
+                "(case-insensitive, severity field or '<severity> Severity' in the title)."
+            ),
+        ] = None,
         verbose: Annotated[
             bool | None, Field(description="Return full description / remediation text (default: trimmed to ~300 characters).")
         ] = None,
@@ -87,6 +110,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                 }
             )
             result = await client.get("incidents", params)
+            if severity and severity.strip():
+                result = local_filter(result, f"severity={severity.strip()}", lambda i: _incident_severity(i, severity))
             return page_summary(result if verbose else trim_incidents(result))
 
         return await run_tool("rocketcyber_list_incidents", client_factory, action)
@@ -94,12 +119,12 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
     @mcp.tool(annotations=READ_ONLY)
     async def rocketcyber_list_events(
         appId: Annotated[
-            int,
+            int | None,
             Field(
-                description="Detection app the events belong to (required by the API). Get ids from "
-                "rocketcyber_get_event_summary (apps with events) or rocketcyber_list_apps."
+                description="Detection app the events belong to; the API needs it. Get ids from "
+                "rocketcyber_list_apps or rocketcyber_get_event_summary (apps with events)."
             ),
-        ],
+        ] = None,
         page: Page = None,
         pageSize: PageSize = None,
         sort: Sort = None,
@@ -113,10 +138,23 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         details: Annotated[
             str | None, Field(description="Filter on an event detail field as path:value, e.g. attributes.city:Redmond.")
         ] = None,
+        eventType: Annotated[
+            str | None,
+            Field(description="Event type, e.g. signin (valueType). Filters the returned page (case-insensitive, exact)."),
+        ] = None,
+        hostname: Annotated[
+            str | None,
+            Field(description="Hostname text. Filters the returned page (case-insensitive substring); prefer deviceId."),
+        ] = None,
     ) -> str:
-        """List the events (detections) of one detection app."""
+        """List the events (detections) of one detection app (appId)."""
 
         async def action(client: RocketCyberClient) -> Any:
+            if appId is None:
+                raise ValueError(
+                    "The RocketCyber API needs appId to list events. Get the detection app ids from "
+                    "rocketcyber_list_apps (or rocketcyber_get_event_summary for apps that have events)."
+                )
             params = page_params(page, pageSize, sort) | compact(
                 {
                     "appId": appId,
@@ -127,7 +165,18 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     "details": details.strip() if details else None,
                 }
             )
-            return page_summary(await client.get("events", params))
+            result = await client.get("events", params)
+            if eventType and eventType.strip():
+                wanted_type = eventType.strip()
+                result = local_filter(
+                    result, f"eventType={wanted_type}", lambda i: matches_exact(i, _EVENT_TYPE, wanted_type), _EVENT_TYPE
+                )
+            if hostname and hostname.strip():
+                wanted_host = hostname.strip()
+                result = local_filter(
+                    result, f"hostname containing {wanted_host!r}", lambda i: matches_substring(i, _EVENT_HOSTNAME, wanted_host), _EVENT_HOSTNAME
+                )
+            return page_summary(result)
 
         return await run_tool("rocketcyber_list_events", client_factory, action)
 

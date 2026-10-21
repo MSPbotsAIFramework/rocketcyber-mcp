@@ -45,14 +45,19 @@ to 25 (the API's own default is 1000), max 200.
 |---|---|---|
 | `rocketcyber_test_connection` | Check the token works in the selected region | - |
 | `rocketcyber_get_account` | Account details and child customer account ids | accountId |
-| `rocketcyber_list_incidents` | Confirmed incidents, newest first; description / remediation trimmed to ~300 characters unless `verbose` | page, pageSize, sort, accountId, status, dates (created), title (`*` wildcard), verbose |
-| `rocketcyber_list_events` | Events (detections) of one detection app | **appId**, page, pageSize, sort, accountId, severity (`malicious` / `suspicious` / `informational`), dates, deviceId, details (`path:value`) |
+| `rocketcyber_list_incidents` | Confirmed incidents, newest first; description / remediation trimmed to ~300 characters unless `verbose` | page, pageSize, sort, accountId, status, dates (created), title (`*` wildcard), severity (local), verbose |
+| `rocketcyber_list_events` | Events (detections) of one detection app; `appId` is needed (`invalid_argument` without it) | appId, page, pageSize, sort, accountId, severity (`malicious` / `suspicious` / `informational`), dates, deviceId, details (`path:value`), eventType (local), hostname (local) |
 | `rocketcyber_get_event_summary` | Event counts per detection app | accountId, dates |
 | `rocketcyber_list_agents` | Endpoint agents with OS, IP, version and online state | page, pageSize, sort, accountId, connectivity (`online` / `offline`), hostname (`*` wildcard), platform (OS, `*` wildcard), dates (installed) |
-| `rocketcyber_list_firewalls` | Firewalls sending logs, with log counters | page, pageSize, sort, accountId, vendor, ipAddress, macAddress |
-| `rocketcyber_list_apps` | Detection apps (ids and descriptions) | sort (`id` / `name`, optional `:desc`), accountId, status (`active` / `inactive`), name (contains) |
+| `rocketcyber_list_firewalls` | Firewalls sending logs, with log counters | page, pageSize, sort, accountId, vendor, ipAddress, macAddress, connectivity (local), hostname (local) |
+| `rocketcyber_list_apps` | Detection apps (ids and descriptions) | page, pageSize (local paging), sort (`id` / `name`, optional `:desc`), accountId, status (`active` / `inactive`), name (contains) |
 | `rocketcyber_get_defender` | Microsoft Defender status | accountId |
 | `rocketcyber_get_office` | Microsoft 365 security status (Secure Score trend) | accountId |
+
+Parameters marked "(local)" have no RocketCyber API filter: they filter the page the API returned
+(case-insensitive; exact match for `severity`, `eventType` and `connectivity`, substring for
+`hostname`) and add a `note`. Paging (`summary`, `has_more`) still describes the API's pages, so
+use `page` to look further.
 
 Errors come back as a JSON envelope instead of an exception:
 
@@ -116,10 +121,17 @@ uv run pytest
   the API does not have; they now map to the documented query parameters:
   agents `platform` -> `os`, agents `dates` -> `created`, incidents `dates` -> `createdAt`, events
   `severity` -> `verdict`, firewalls `vendor` -> `type`, apps `sort` -> `sort` + `order`.
-- **Removed parameters** with no API filter: incidents `severity`; events `eventType` and
-  `hostname` (use `deviceId` or `details` instead); firewalls `connectivity` and `hostname`;
-  apps `page` and `pageSize` (the apps endpoint is not paged). Apps `name` filters the returned
-  list locally.
+- **Parameters with no API filter** are kept for compatibility and applied locally to the
+  returned page: incidents `severity` (a `severity` field, else `<severity> Severity` in the
+  title); events `eventType` (`valueType`) and `hostname` (`hostname` / `details.hostname`; prefer
+  `deviceId` or `details`); firewalls `connectivity` and `hostname`. Apps `page` and `pageSize`
+  slice the app list locally (the apps endpoint is not paged) and return `has_more`; apps `name`
+  filters the returned list locally.
+- **`appId` on events** is optional in the schema for compatibility with earlier versions, but the
+  API needs it: a call without it returns `invalid_argument` pointing to `rocketcyber_list_apps`.
+- **Contract test.** `tests/contract_baseline.json` holds the deployed and upstream tool schemas;
+  `tests/test_contract.py` checks every tool still exists, accepts every parameter of both and
+  requires nothing the deployed version did not.
 - **Event summary.** `dates` is passed through as in earlier versions; the API reference lists
   only `accountId` for this endpoint.
 

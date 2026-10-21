@@ -21,6 +21,7 @@ from pydantic import Field
 from ..api_client import RocketCyberClient
 from ._common import (
     READ_ONLY,
+    DEFAULT_PAGE_SIZE,
     AccountId,
     ClientFactory,
     Page,
@@ -28,6 +29,9 @@ from ._common import (
     Sort,
     compact,
     date_range,
+    local_filter,
+    matches_exact,
+    matches_substring,
     page_params,
     page_summary,
     run_tool,
@@ -35,8 +39,29 @@ from ._common import (
 )
 
 
+# Response fields the local (returned-page) firewall filters look at, first non-empty wins.
+_FIREWALL_CONNECTIVITY = ("connectivity", "details.connectivity")
+_FIREWALL_HOSTNAME = ("hostname", "details.hostname", "name", "details.name")
+
+
 def _text(value: str | None) -> str | None:
     return value.strip() if value and value.strip() else None
+
+
+def slice_apps(payload: Any, page: int | None, page_size: int | None) -> Any:
+    """Page the (unpaged) app list locally; without page/pageSize every app is returned."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        return payload
+    apps = payload["data"]
+    size = page_size or (DEFAULT_PAGE_SIZE if page else max(len(apps), 1))
+    current = page or 1
+    pages = max((len(apps) + size - 1) // size, 1)
+    chunk = apps[(current - 1) * size : current * size]
+    summary = {"count": len(chunk), "total": len(apps), "page": current, "total_pages": pages, "has_more": current < pages}
+    if current < pages:
+        summary["next_page"] = current + 1
+    rest = {k: v for k, v in payload.items() if k not in ("data", "currentPage", "totalPages", "totalCount", "dataCount")}
+    return {"summary": summary, **rest, "dataCount": len(chunk), "data": chunk}
 
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
@@ -78,6 +103,13 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         vendor: Annotated[str | None, Field(description="Firewall type (vendor), e.g. sonicwall.")] = None,
         ipAddress: Annotated[str | None, Field(description="Firewall IP address.")] = None,
         macAddress: Annotated[str | None, Field(description="Firewall MAC address.")] = None,
+        connectivity: Annotated[
+            str | None,
+            Field(description="Connection state, e.g. online. Filters the returned page (case-insensitive, exact)."),
+        ] = None,
+        hostname: Annotated[
+            str | None, Field(description="Hostname text. Filters the returned page (case-insensitive substring).")
+        ] = None,
     ) -> str:
         """List firewalls sending logs to RocketCyber, with log counters."""
 
@@ -90,12 +122,33 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     "macAddress": _text(macAddress),
                 }
             )
-            return page_summary(await client.get("firewalls", params))
+            result = await client.get("firewalls", params)
+            wanted_state, wanted_host = _text(connectivity), _text(hostname)
+            if wanted_state:
+                result = local_filter(
+                    result, f"connectivity={wanted_state}",
+                    lambda i: matches_exact(i, _FIREWALL_CONNECTIVITY, wanted_state),
+                    _FIREWALL_CONNECTIVITY,
+                )
+            if wanted_host:
+                result = local_filter(
+                    result, f"hostname containing {wanted_host!r}",
+                    lambda i: matches_substring(i, _FIREWALL_HOSTNAME, wanted_host),
+                    _FIREWALL_HOSTNAME,
+                )
+            return page_summary(result)
 
         return await run_tool("rocketcyber_list_firewalls", client_factory, action)
 
     @mcp.tool(annotations=READ_ONLY)
     async def rocketcyber_list_apps(
+        page: Annotated[
+            int | None, Field(description="Page of the app list, from 1 (paged locally; the API returns every app).", ge=1)
+        ] = None,
+        pageSize: Annotated[
+            int | None,
+            Field(description=f"Apps per page (default: all, or {DEFAULT_PAGE_SIZE} when page is set).", ge=1, le=200),
+        ] = None,
         sort: Annotated[str | None, Field(description="id or name, optionally :asc / :desc (default id).")] = None,
         accountId: AccountId = None,
         status: Annotated[
@@ -115,7 +168,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             if needle and isinstance(result, dict) and isinstance(result.get("data"), list):
                 apps = [a for a in result["data"] if needle.lower() in str((a or {}).get("name", "")).lower()]
                 result = {**result, "data": apps, "dataCount": len(apps), "note": f"Filtered by name containing {needle!r}."}
-            return page_summary(result)
+            return slice_apps(result, page, pageSize)
 
         return await run_tool("rocketcyber_list_apps", client_factory, action)
 

@@ -102,6 +102,49 @@ def page_summary(payload: Any) -> Any:
     return {"summary": summary, **payload}
 
 
+def field_value(item: Any, paths: tuple[str, ...]) -> Any:
+    """First non-empty value found at one of the dotted ``paths`` of a response item."""
+    for path in paths:
+        value: Any = item
+        for key in path.split("."):
+            value = value.get(key) if isinstance(value, dict) else None
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def local_filter(payload: Any, label: str, keep: Callable[[dict], bool], paths: tuple[str, ...] | None = None) -> Any:
+    """Filter the items of one returned page (the API has no such filter); paging stays the API's.
+
+    With ``paths``, the filter is skipped (and the note says so) when no item on the page
+    carries any of those fields, so an unexpected response shape never empties the result.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        return payload
+    items = payload["data"]
+    if paths and not any(isinstance(item, dict) and field_value(item, paths) is not None for item in items):
+        note = f"Filter {label} not applied: the items on this page carry no such field."
+        previous = payload.get("note")
+        return {**payload, "note": f"{previous} {note}" if previous else note}
+    kept = [item for item in items if isinstance(item, dict) and keep(item)]
+    note = (
+        f"Filtered locally by {label}: {len(kept)} of {len(items)} items on this page match. "
+        "Other pages are not searched; page through them for more."
+    )
+    previous = payload.get("note")
+    return {**payload, "data": kept, "dataCount": len(kept), "note": f"{previous} {note}" if previous else note}
+
+
+def matches_exact(item: dict, paths: tuple[str, ...], wanted: str) -> bool:
+    value = field_value(item, paths)
+    return value is not None and str(value).strip().lower() == wanted.strip().lower()
+
+
+def matches_substring(item: dict, paths: tuple[str, ...], wanted: str) -> bool:
+    value = field_value(item, paths)
+    return value is not None and wanted.strip().lower() in str(value).lower()
+
+
 async def run_tool(
     name: str,
     client_factory: ClientFactory,

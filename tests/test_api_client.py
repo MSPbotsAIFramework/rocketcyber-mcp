@@ -175,9 +175,74 @@ async def test_events_mapping(monkeypatch):
 
 async def test_events_need_app_id(monkeypatch):
     rec = Recorder()
-    with pytest.raises(ToolError):
-        await _call(monkeypatch, rec, "rocketcyber_list_events", {})
+    result = await _call(monkeypatch, rec, "rocketcyber_list_events", {})
+    assert result["error"]["code"] == "invalid_argument"
+    assert "appId" in result["error"]["message"] and "rocketcyber_list_apps" in result["error"]["message"]
     assert rec.requests == []
+
+
+async def test_bad_argument_type_still_raises(monkeypatch):
+    with pytest.raises(ToolError):
+        await _call(monkeypatch, Recorder(), "rocketcyber_list_events", {"appId": "not-a-number"})
+
+
+def _page(items):
+    return {"totalCount": 40, "currentPage": 1, "totalPages": 2, "dataCount": len(items), "data": items}
+
+
+async def test_events_local_event_type_and_hostname(monkeypatch):
+    items = [
+        {"appId": 60, "valueType": "SignIn", "details": {"hostname": "HQ-SRV-01"}},
+        {"appId": 60, "valueType": "signin", "details": {"hostname": "branch-lt-07"}},
+        {"appId": 60, "valueType": "process", "details": {"hostname": "hq-srv-02"}},
+    ]
+    rec = Recorder({"events": _page(items)})
+    args = {"appId": 60, "eventType": "SIGNIN", "hostname": "srv"}
+    result = await _call(monkeypatch, rec, "rocketcyber_list_events", args)
+    assert "eventType" not in rec.params() and "hostname" not in rec.params()
+    assert [i["details"]["hostname"] for i in result["data"]] == ["HQ-SRV-01"]
+    assert result["summary"]["count"] == 1 and result["summary"]["has_more"] is True
+    assert "this page" in result["note"]
+
+
+async def test_incidents_local_severity(monkeypatch):
+    items = [
+        {"id": 1, "title": "Sophos Event::Endpoint::CoreCleanFailed - high Severity"},
+        {"id": 2, "title": "Webroot Detection - low Severity"},
+        {"id": 3, "title": "Other", "severity": "High"},
+        {"id": 4, "title": "Mentions high Severity", "severity": "low"},
+    ]
+    rec = Recorder({"incidents": _page(items)})
+    result = await _call(monkeypatch, rec, "rocketcyber_list_incidents", {"severity": "HIGH"})
+    assert "severity" not in rec.params()
+    assert [i["id"] for i in result["data"]] == [1, 3]
+
+
+async def test_firewalls_local_connectivity_and_hostname(monkeypatch):
+    items = [
+        {"id": "1", "connectivity": "online", "hostname": "Edge-FW-01"},
+        {"id": "2", "connectivity": "Offline", "hostname": "edge-fw-02"},
+        {"id": "3", "details": {"type": "sonicwall"}},
+    ]
+    rec = Recorder({"firewalls": _page(items)})
+    result = await _call(monkeypatch, rec, "rocketcyber_list_firewalls", {"connectivity": "offline", "hostname": "FW"})
+    assert rec.params() == {"pageSize": "25"}
+    assert [i["id"] for i in result["data"]] == ["2"]
+    result = await _call(monkeypatch, rec, "rocketcyber_list_firewalls", {"hostname": "edge"})
+    assert [i["id"] for i in result["data"]] == ["1", "2"]
+
+
+async def test_apps_local_paging(monkeypatch):
+    data = [{"id": n, "name": f"App {n}"} for n in range(1, 6)]
+    rec = Recorder({"apps": {"totalCount": 5, "currentPage": 1, "totalPages": 1, "dataCount": 5, "data": data}})
+    result = await _call(monkeypatch, rec, "rocketcyber_list_apps", {"page": 2, "pageSize": 2})
+    assert rec.params() == {}
+    assert [a["id"] for a in result["data"]] == [3, 4]
+    assert result["summary"] == {"count": 2, "total": 5, "page": 2, "total_pages": 3, "has_more": True, "next_page": 3}
+    result = await _call(monkeypatch, rec, "rocketcyber_list_apps", {"page": 3, "pageSize": 2})
+    assert [a["id"] for a in result["data"]] == [5] and result["summary"]["has_more"] is False
+    result = await _call(monkeypatch, rec, "rocketcyber_list_apps", {})
+    assert len(result["data"]) == 5 and result["summary"]["has_more"] is False
 
 
 async def test_event_summary(monkeypatch):
@@ -214,3 +279,10 @@ async def test_posture_tools(monkeypatch, tool, path):
     assert rec.requests[0].url.path == f"/v3/{path}"
     assert rec.params() == {"accountId": "7"}
     assert result == {"ok": True}
+
+
+async def test_local_filter_is_skipped_when_no_item_has_the_field(monkeypatch):
+    rec = Recorder({"firewalls": {"totalCount": 2, "dataCount": 2, "data": [{"id": "1"}, {"id": "2"}]}})
+    result = await _call(monkeypatch, rec, "rocketcyber_list_firewalls", {"connectivity": "offline"})
+    assert len(result["data"]) == 2
+    assert "not applied" in result["note"]

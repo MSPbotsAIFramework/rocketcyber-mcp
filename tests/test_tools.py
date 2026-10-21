@@ -30,7 +30,7 @@ EXPECTED_TOOLS: dict[str, set[str]] = {
     "rocketcyber_get_account": set(),
     "rocketcyber_list_agents": set(),
     "rocketcyber_list_incidents": set(),
-    "rocketcyber_list_events": {"appId"},
+    "rocketcyber_list_events": set(),
     "rocketcyber_get_event_summary": set(),
     "rocketcyber_list_firewalls": set(),
     "rocketcyber_list_apps": set(),

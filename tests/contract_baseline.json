@@ -1,0 +1,193 @@
+{
+  "int_baseline": {
+    "rocketcyber_get_account": {
+      "params": [
+        "accountId"
+      ],
+      "required": []
+    },
+    "rocketcyber_get_defender": {
+      "params": [
+        "accountId"
+      ],
+      "required": []
+    },
+    "rocketcyber_get_event_summary": {
+      "params": [
+        "accountId",
+        "dates"
+      ],
+      "required": []
+    },
+    "rocketcyber_get_office": {
+      "params": [
+        "accountId"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_agents": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "connectivity",
+        "hostname",
+        "platform",
+        "dates"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_apps": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "status",
+        "name"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_events": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "eventType",
+        "severity",
+        "dates",
+        "hostname"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_firewalls": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "connectivity",
+        "hostname",
+        "vendor"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_incidents": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "status",
+        "dates",
+        "severity",
+        "title",
+        "verbose"
+      ],
+      "required": []
+    },
+    "rocketcyber_test_connection": {
+      "params": [],
+      "required": []
+    }
+  },
+  "upstream": {
+    "rocketcyber_get_account": {
+      "params": [
+        "accountId"
+      ],
+      "required": []
+    },
+    "rocketcyber_get_defender": {
+      "params": [
+        "accountId"
+      ],
+      "required": []
+    },
+    "rocketcyber_get_event_summary": {
+      "params": [
+        "accountId",
+        "dates"
+      ],
+      "required": []
+    },
+    "rocketcyber_get_office": {
+      "params": [
+        "accountId"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_agents": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "connectivity",
+        "hostname",
+        "platform",
+        "dates"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_apps": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "status",
+        "name"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_events": {
+      "params": [
+        "appId",
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "eventType",
+        "severity",
+        "dates",
+        "hostname"
+      ],
+      "required": [
+        "appId"
+      ]
+    },
+    "rocketcyber_list_firewalls": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "connectivity",
+        "hostname",
+        "vendor"
+      ],
+      "required": []
+    },
+    "rocketcyber_list_incidents": {
+      "params": [
+        "page",
+        "pageSize",
+        "sort",
+        "accountId",
+        "status",
+        "dates",
+        "severity",
+        "title",
+        "verbose"
+      ],
+      "required": []
+    },
+    "rocketcyber_test_connection": {
+      "params": [],
+      "required": []
+    }
+  }
+}
