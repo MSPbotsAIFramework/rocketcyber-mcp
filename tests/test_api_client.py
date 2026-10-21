@@ -286,3 +286,24 @@ async def test_local_filter_is_skipped_when_no_item_has_the_field(monkeypatch):
     result = await _call(monkeypatch, rec, "rocketcyber_list_firewalls", {"connectivity": "offline"})
     assert len(result["data"]) == 2
     assert "not applied" in result["note"]
+
+
+# ---- compatibility: enum params accept any casing (normalized) and unknown values (passed through)
+
+
+@pytest.mark.parametrize(
+    "tool,args,key,sent",
+    [
+        ("rocketcyber_list_agents", {"connectivity": "Online"}, "connectivity", "online"),
+        ("rocketcyber_list_agents", {"connectivity": "isolated"}, "connectivity", "isolated"),
+        ("rocketcyber_list_events", {"appId": 34, "severity": "MALICIOUS"}, "verdict", "malicious"),
+        ("rocketcyber_list_events", {"appId": 34, "severity": "benign"}, "verdict", "benign"),
+        ("rocketcyber_list_apps", {"status": "Inactive"}, "status", "inactive"),
+        ("rocketcyber_list_apps", {"status": "all"}, "status", "all"),
+    ],
+)
+async def test_enum_params_normalized_or_passed_through(monkeypatch, tool, args, key, sent):
+    rec = Recorder()
+    result = await _call(monkeypatch, rec, tool, args)
+    assert "error" not in result
+    assert rec.params()[key] == sent

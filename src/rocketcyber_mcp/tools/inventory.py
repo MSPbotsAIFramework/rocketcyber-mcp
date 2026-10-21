@@ -29,6 +29,7 @@ from ._common import (
     Sort,
     compact,
     date_range,
+    enum_value,
     local_filter,
     matches_exact,
     matches_substring,
@@ -42,6 +43,8 @@ from ._common import (
 # Response fields the local (returned-page) firewall filters look at, first non-empty wins.
 _FIREWALL_CONNECTIVITY = ("connectivity", "details.connectivity")
 _FIREWALL_HOSTNAME = ("hostname", "details.hostname", "name", "details.name")
+Connectivity = Literal["online", "offline"]
+AppStatus = Literal["active", "inactive"]
 
 
 def _text(value: str | None) -> str | None:
@@ -71,7 +74,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         pageSize: PageSize = None,
         sort: Sort = None,
         accountId: AccountId = None,
-        connectivity: Annotated[Literal["online", "offline"] | None, Field(description="Only agents in this state.")] = None,
+        connectivity: Annotated[Connectivity | str | None, Field(description="Only agents in this state.")] = None,
         hostname: Annotated[str | None, Field(description="Hostname; * is a wildcard, e.g. *-SRV-*.")] = None,
         platform: Annotated[str | None, Field(description="Operating system; * is a wildcard, e.g. Windows*.")] = None,
         dates: Annotated[
@@ -84,7 +87,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             params = page_params(page, pageSize, sort) | compact(
                 {
                     "accountId": accountId,
-                    "connectivity": connectivity,
+                    "connectivity": enum_value(connectivity, Connectivity),
                     "hostname": _text(hostname),
                     "os": _text(platform),
                     "created": date_range(dates),
@@ -152,7 +155,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         sort: Annotated[str | None, Field(description="id or name, optionally :asc / :desc (default id).")] = None,
         accountId: AccountId = None,
         status: Annotated[
-            Literal["active", "inactive"] | None, Field(description="Enabled (active, default) or disabled apps.")
+            AppStatus | str | None, Field(description="Enabled (active, default) or disabled apps.")
         ] = None,
         name: Annotated[str | None, Field(description="Only apps whose name contains this text.")] = None,
     ) -> str:
@@ -162,7 +165,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             field, _, order = (sort_param(sort) or "").partition(":")
             if field and field not in ("id", "name"):
                 raise ValueError("sort must be id or name, optionally with :asc or :desc.")
-            params = compact({"accountId": accountId, "status": status, "sort": field or None, "order": order or None})
+            params = compact({"accountId": accountId, "status": enum_value(status, AppStatus), "sort": field or None, "order": order or None})
             result = await client.get("apps", params)
             needle = _text(name)
             if needle and isinstance(result, dict) and isinstance(result.get("data"), list):

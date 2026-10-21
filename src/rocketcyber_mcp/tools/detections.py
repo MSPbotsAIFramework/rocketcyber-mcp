@@ -29,6 +29,7 @@ from ._common import (
     Sort,
     compact,
     date_range,
+    enum_value,
     field_value,
     local_filter,
     matches_exact,
@@ -41,6 +42,7 @@ from ._common import (
 # Incident description / remediation can run to several KB each.
 _FREE_TEXT_FIELDS = ("description", "remediation")
 _TEXT_LIMIT = 300
+Verdict = Literal["malicious", "suspicious", "informational"]
 
 # Response fields the local (returned-page) filters look at, first non-empty wins.
 _INCIDENT_SEVERITY = ("severity", "details.severity")
@@ -130,7 +132,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         sort: Sort = None,
         accountId: AccountId = None,
         severity: Annotated[
-            Literal["malicious", "suspicious", "informational"] | None,
+            Verdict | str | None,
             Field(description="Only events with this verdict."),
         ] = None,
         dates: Dates = None,
@@ -159,7 +161,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                 {
                     "appId": appId,
                     "accountId": accountId,
-                    "verdict": severity,
+                    "verdict": enum_value(severity, Verdict),
                     "dates": date_range(dates),
                     "deviceId": deviceId.strip() if deviceId else None,
                     "details": details.strip() if details else None,
