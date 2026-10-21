@@ -28,7 +28,9 @@ How the key is sent to RocketCyber: as `Authorization: Bearer <token>` on every 
 `https://api-us.rocketcyber.com/v3/...` (region `us`) or `https://api-eu.rocketcyber.com/v3/...`
 (region `eu`).
 
-A request to `/mcp` without the key gets HTTP 401; a region other than `us` / `eu` gets HTTP 400.
+A request to `/mcp` without the key gets HTTP 401. A region other than `us` / `eu` does not block
+the request (tools/list still works); every tool call then returns an `invalid_argument` error
+naming the allowed regions.
 
 ## Tools
 

@@ -85,6 +85,9 @@ class RocketCyberError(Exception):
 class RocketCyberCredentials:
     api_key: str
     region: str = DEFAULT_REGION
+    # Set when a header value is malformed: tools then return invalid_argument
+    # instead of calling RocketCyber, while tools/list still works.
+    header_error: str | None = None
 
     @property
     def base_url(self) -> str:
@@ -100,6 +103,7 @@ class RocketCyberClient:
     def __init__(self, credentials: RocketCyberCredentials, http_client: httpx.AsyncClient | None = None):
         self._credentials = credentials
         self._http = http_client
+        self.header_error = credentials.header_error
         self.base_url = credentials.base_url.rstrip("/")
 
     def _client(self) -> httpx.AsyncClient:
