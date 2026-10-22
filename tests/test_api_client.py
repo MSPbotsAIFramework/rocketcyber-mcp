@@ -467,3 +467,15 @@ async def test_locally_filtered_cut_page_retries_from_the_same_offset(monkeypatc
             break
         offset = result["next_offset"]
     assert cut and seen == [r["id"] for r in records if keep(r)]
+
+
+async def test_cut_page_also_fixes_the_nested_paging_summary(monkeypatch):
+    # The paging summary is nested, so the size limit's own cleanup does not reach it: a cut page
+    # must not keep summary.next_page (it would skip the cut records) or the full page's count.
+    rec = Recorder(_routes(_records()))
+    result = await _call(monkeypatch, rec, "rocketcyber_list_agents", {"page": 1, "pageSize": 100})
+    returned = len(result["data"])
+    assert result["truncated"] is True and 0 < returned < 100 and result["next_offset"] == returned
+    assert "next_page" not in result["summary"] and result["summary"]["has_more"] is True
+    if "count" in result["summary"]:
+        assert result["summary"]["count"] == returned

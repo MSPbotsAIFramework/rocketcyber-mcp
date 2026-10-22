@@ -88,6 +88,11 @@ def dump_json_capped(data: Any, max_chars: int = MAX_CHARS) -> str:
                 candidate["truncated"] = True
                 candidate["truncated_field"] = key
                 candidate["retry_page_size"] = max(n, 1)
+                summary = candidate.get("summary")
+                if isinstance(summary, dict):
+                    # The paging summary is nested: its next page would skip the cut records too.
+                    summary = {k: v for k, v in summary.items() if k not in _CONTINUATION_KEYS}
+                    candidate["summary"] = summary | {"has_more": True} | ({"count": n} if "count" in summary else {})
                 if resume and isinstance(resume.get("start"), int) and resume.get("key"):
                     candidate[resume["key"]] = resume["start"] + n
                     del candidate["retry_page_size"]  # the continuation field is exact; no retry needed
