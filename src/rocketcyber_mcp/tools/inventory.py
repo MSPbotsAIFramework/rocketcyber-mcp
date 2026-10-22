@@ -24,6 +24,7 @@ from ._common import (
     DEFAULT_PAGE_SIZE,
     AccountId,
     ClientFactory,
+    Offset,
     Page,
     PageSize,
     Sort,
@@ -31,12 +32,15 @@ from ._common import (
     date_range,
     enum_value,
     local_filter,
+    locate,
     matches_exact,
     matches_substring,
     page_params,
     page_summary,
+    page_window,
     run_tool,
     sort_param,
+    window_size,
 )
 
 
@@ -51,20 +55,28 @@ def _text(value: str | None) -> str | None:
     return value.strip() if value and value.strip() else None
 
 
-def slice_apps(payload: Any, page: int | None, page_size: int | None) -> Any:
-    """Page the (unpaged) app list locally; without page/pageSize every app is returned."""
+def slice_apps(payload: Any, page: int | None, page_size: int | None, offset: int | None = None) -> Any:
+    """Page the (unpaged) app list locally; without page/pageSize every app is returned.
+
+    ``offset`` (a position in the list) overrides ``page``: the page that holds it is read from
+    that record on, and ``next_offset`` continues right after the last app returned.
+    """
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         return payload
     apps = payload["data"]
     size = page_size or (DEFAULT_PAGE_SIZE if page else max(len(apps), 1))
-    current = page or 1
+    start = offset if offset is not None else ((page or 1) - 1) * size
+    current = start // size + 1
     pages = max((len(apps) + size - 1) // size, 1)
-    chunk = apps[(current - 1) * size : current * size]
+    chunk = apps[start : current * size]
     summary = {"count": len(chunk), "total": len(apps), "page": current, "total_pages": pages, "has_more": current < pages}
     if current < pages:
         summary["next_page"] = current + 1
+    paging: dict[str, Any] = {"offset": start, "_resume": {"key": "next_offset", "start": start}}
+    if current < pages:
+        paging["next_offset"] = start + len(chunk)
     rest = {k: v for k, v in payload.items() if k not in ("data", "currentPage", "totalPages", "totalCount", "dataCount")}
-    return {"summary": summary, **rest, "dataCount": len(chunk), "data": chunk}
+    return {"summary": summary, **paging, **rest, "dataCount": len(chunk), "data": chunk}
 
 
 def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
@@ -80,11 +92,13 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         dates: Annotated[
             str | None, Field(description="Agent installed between start|end (ISO, either side may be empty), e.g. 2026-01-01|.")
         ] = None,
+        offset: Offset = None,
     ) -> str:
         """List monitored endpoint agents with OS, IP, version and online state."""
 
         async def action(client: RocketCyberClient) -> Any:
-            params = page_params(page, pageSize, sort) | compact(
+            number, size, start = locate(offset, page, pageSize)
+            params = page_params(number, size, sort) | compact(
                 {
                     "accountId": accountId,
                     "connectivity": enum_value(connectivity, Connectivity),
@@ -93,7 +107,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     "created": date_range(dates),
                 }
             )
-            return page_summary(await client.get("agents", params))
+            result = page_window(await client.get("agents", params), number, size, start)
+            return page_summary(result, start, window_size(result))
 
         return await run_tool("rocketcyber_list_agents", client_factory, action)
 
@@ -113,11 +128,13 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         hostname: Annotated[
             str | None, Field(description="Hostname text. Filters the returned page (case-insensitive substring).")
         ] = None,
+        offset: Offset = None,
     ) -> str:
         """List firewalls sending logs to RocketCyber, with log counters."""
 
         async def action(client: RocketCyberClient) -> Any:
-            params = page_params(page, pageSize, sort) | compact(
+            number, size, start = locate(offset, page, pageSize)
+            params = page_params(number, size, sort) | compact(
                 {
                     "accountId": accountId,
                     "type": _text(vendor),
@@ -125,7 +142,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     "macAddress": _text(macAddress),
                 }
             )
-            result = await client.get("firewalls", params)
+            result = page_window(await client.get("firewalls", params), number, size, start)
+            seen = window_size(result)
             wanted_state, wanted_host = _text(connectivity), _text(hostname)
             if wanted_state:
                 result = local_filter(
@@ -139,7 +157,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     lambda i: matches_substring(i, _FIREWALL_HOSTNAME, wanted_host),
                     _FIREWALL_HOSTNAME,
                 )
-            return page_summary(result)
+            return page_summary(result, start, seen, exact=not (wanted_state or wanted_host))
 
         return await run_tool("rocketcyber_list_firewalls", client_factory, action)
 
@@ -158,6 +176,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             AppStatus | str | None, Field(description="Enabled (active, default) or disabled apps.")
         ] = None,
         name: Annotated[str | None, Field(description="Only apps whose name contains this text.")] = None,
+        offset: Offset = None,
     ) -> str:
         """List detection apps (ids and descriptions); events are grouped by app id."""
 
@@ -171,7 +190,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             if needle and isinstance(result, dict) and isinstance(result.get("data"), list):
                 apps = [a for a in result["data"] if needle.lower() in str((a or {}).get("name", "")).lower()]
                 result = {**result, "data": apps, "dataCount": len(apps), "note": f"Filtered by name containing {needle!r}."}
-            return slice_apps(result, page, pageSize)
+            return slice_apps(result, page, pageSize, offset)
 
         return await run_tool("rocketcyber_list_apps", client_factory, action)
 

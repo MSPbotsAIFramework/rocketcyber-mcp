@@ -43,6 +43,10 @@ AccountId = Annotated[
 ]
 Page = Annotated[int | None, Field(description="Page number, from 1.", ge=1)]
 PageSize = Annotated[int | None, Field(description=f"Results per page (default {DEFAULT_PAGE_SIZE}, max 200).", ge=1, le=200)]
+Offset = Annotated[
+    int | None,
+    Field(description="Record position to start from (0-based, overrides page); pass next_offset from the previous result.", ge=0),
+]
 Sort = Annotated[str | None, Field(description="field or field:asc / field:desc, e.g. createdAt:desc.")]
 Dates = Annotated[
     str | None,
@@ -85,8 +89,45 @@ def page_params(page: int | None, page_size: int | None, sort: str | None) -> di
     return compact({"page": page, "pageSize": page_size or DEFAULT_PAGE_SIZE, "sort": sort_param(sort)})
 
 
-def page_summary(payload: Any) -> Any:
-    """Add a short paging line to the API's {totalCount, currentPage, totalPages, data} pages."""
+def locate(offset: int | None, page: int | None, page_size: int | None) -> tuple[int | None, int, int]:
+    """(page to request, page size, start) for a read from record ``start``.
+
+    RocketCyber pages by number only, so a position is reached by asking for the page that
+    holds it (same page size) and skipping the records before it. Without ``offset`` the page
+    to request is ``page`` unchanged (None when not given), so such calls send the same request.
+    """
+    size = page_size or DEFAULT_PAGE_SIZE
+    if offset is None:
+        return page, size, ((page or 1) - 1) * size
+    return offset // size + 1, size, offset
+
+
+def page_window(payload: Any, page: int | None, size: int, start: int) -> Any:
+    """The fetched page from record ``start`` on (``page`` is the page number that was requested)."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        return payload
+    data = payload["data"][max(start - ((page or 1) - 1) * size, 0) :]
+    shaped = {**payload, "data": data}
+    if "dataCount" in payload:
+        shaped["dataCount"] = len(data)
+    return shaped
+
+
+def window_size(payload: Any) -> int:
+    """Number of records in a page window (before any local filter)."""
+    return len(payload["data"]) if isinstance(payload, dict) and isinstance(payload.get("data"), list) else 0
+
+
+def page_summary(payload: Any, start: int | None = None, seen: int = 0, exact: bool = True) -> Any:
+    """Add a short paging line to the API's {totalCount, currentPage, totalPages, data} pages.
+
+    With ``start`` (the position of the first record of the window) the result also carries
+    ``offset`` and ``next_offset`` (= start + ``seen``, the records of the window before any
+    local filter), which continues right after the window also when a result is cut to fit the
+    size limit (a page number cannot: the rest of a cut page is on no other page). ``exact`` is
+    False when a local filter removed records: positions of the returned records are then not
+    consecutive, so a cut result asks for a smaller page size from the same offset instead.
+    """
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         return payload
     current, pages = payload.get("currentPage") or 1, payload.get("totalPages") or 1
@@ -99,7 +140,14 @@ def page_summary(payload: Any) -> Any:
     }
     if current < pages:
         summary["next_page"] = current + 1
-    return {"summary": summary, **payload}
+    if start is None:
+        return {"summary": summary, **payload}
+    paging: dict[str, Any] = {"offset": start}
+    if current < pages:
+        paging["next_offset"] = start + seen
+    if exact:
+        paging["_resume"] = {"key": "next_offset", "start": start}
+    return {"summary": summary, **paging, **payload}
 
 
 def field_value(item: Any, paths: tuple[str, ...]) -> Any:

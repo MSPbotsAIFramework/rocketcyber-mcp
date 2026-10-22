@@ -36,6 +36,11 @@ naming the allowed regions.
 
 All tools return a JSON string. Paged lists keep the API's `{totalCount, currentPage, totalPages,
 dataCount, data}` and add `summary {count, total, page, total_pages, has_more, next_page}`.
+They also take `offset` (record position, overriding `page`) and return `offset` / `next_offset`:
+when a page is too large for the response size limit and is cut, `next_offset` continues right
+after the last record returned, which `page` cannot (the rest of a cut page is on no other page).
+With a local filter (below) a cut page gives `retry_page_size` instead: call again with that
+`pageSize` and the same `offset`.
 `accountId` scopes a tool to one customer account; without it the tool covers every account the
 token can see. `dates` filters take `start|end` (ISO dates, either side may be empty; a single date
 means "from that date on"). `sort` takes `field`, `field:asc` or `field:desc`. `pageSize` defaults

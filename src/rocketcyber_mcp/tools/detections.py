@@ -24,6 +24,7 @@ from ._common import (
     AccountId,
     ClientFactory,
     Dates,
+    Offset,
     Page,
     PageSize,
     Sort,
@@ -32,11 +33,14 @@ from ._common import (
     enum_value,
     field_value,
     local_filter,
+    locate,
     matches_exact,
     matches_substring,
     page_params,
     page_summary,
+    page_window,
     run_tool,
+    window_size,
 )
 
 # Incident description / remediation can run to several KB each.
@@ -99,11 +103,13 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
         verbose: Annotated[
             bool | None, Field(description="Return full description / remediation text (default: trimmed to ~300 characters).")
         ] = None,
+        offset: Offset = None,
     ) -> str:
         """List security incidents (threats the SOC confirmed), newest first by default."""
 
         async def action(client: RocketCyberClient) -> Any:
-            params = page_params(page, pageSize, sort or "createdAt:desc") | compact(
+            number, size, start = locate(offset, page, pageSize)
+            params = page_params(number, size, sort or "createdAt:desc") | compact(
                 {
                     "accountId": accountId,
                     "status": status.strip() if status else None,
@@ -111,10 +117,11 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     "title": title.strip() if title else None,
                 }
             )
-            result = await client.get("incidents", params)
-            if severity and severity.strip():
+            result = page_window(await client.get("incidents", params), number, size, start)
+            seen, filtered = window_size(result), bool(severity and severity.strip())
+            if filtered:
                 result = local_filter(result, f"severity={severity.strip()}", lambda i: _incident_severity(i, severity))
-            return page_summary(result if verbose else trim_incidents(result))
+            return page_summary(result if verbose else trim_incidents(result), start, seen, exact=not filtered)
 
         return await run_tool("rocketcyber_list_incidents", client_factory, action)
 
@@ -148,6 +155,7 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
             str | None,
             Field(description="Hostname text. Filters the returned page (case-insensitive substring); prefer deviceId."),
         ] = None,
+        offset: Offset = None,
     ) -> str:
         """List the events (detections) of one detection app (appId)."""
 
@@ -157,7 +165,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     "The RocketCyber API needs appId to list events. Get the detection app ids from "
                     "rocketcyber_list_apps (or rocketcyber_get_event_summary for apps that have events)."
                 )
-            params = page_params(page, pageSize, sort) | compact(
+            number, size, start = locate(offset, page, pageSize)
+            params = page_params(number, size, sort) | compact(
                 {
                     "appId": appId,
                     "accountId": accountId,
@@ -167,7 +176,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                     "details": details.strip() if details else None,
                 }
             )
-            result = await client.get("events", params)
+            result = page_window(await client.get("events", params), number, size, start)
+            seen = window_size(result)
             if eventType and eventType.strip():
                 wanted_type = eventType.strip()
                 result = local_filter(
@@ -178,7 +188,8 @@ def register(mcp: FastMCP, client_factory: ClientFactory) -> None:
                 result = local_filter(
                     result, f"hostname containing {wanted_host!r}", lambda i: matches_substring(i, _EVENT_HOSTNAME, wanted_host), _EVENT_HOSTNAME
                 )
-            return page_summary(result)
+            filtered = bool((eventType and eventType.strip()) or (hostname and hostname.strip()))
+            return page_summary(result, start, seen, exact=not filtered)
 
         return await run_tool("rocketcyber_list_events", client_factory, action)
 

@@ -307,3 +307,163 @@ async def test_enum_params_normalized_or_passed_through(monkeypatch, tool, args,
     result = await _call(monkeypatch, rec, tool, args)
     assert "error" not in result
     assert rec.params()[key] == sent
+
+
+# ---- Page-number paging that survives truncation ----------------------------
+# RocketCyber pages by page + pageSize only. offset reads the page that holds a record position
+# and next_offset continues right after the last record returned, also when a page is cut to fit
+# the response size limit (the rest of a cut page is on no other page).
+
+TOTAL = 130
+# Many short fields: shortening long values cannot make 25 such records fit 20,000 characters.
+BLOB = {f"field{k}": "z" * 60 for k in range(30)}
+
+
+def _paged_api(records):
+    """Fake API paging ``records`` by page (from 1) and pageSize like RocketCyber."""
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params.get("page", 1))
+        size = int(request.url.params.get("pageSize", 1000))
+        pages = max((len(records) + size - 1) // size, 1)
+        chunk = records[(page - 1) * size : page * size]
+        return httpx.Response(
+            200,
+            json={"totalCount": len(records), "currentPage": page, "totalPages": pages, "dataCount": len(chunk), "data": chunk},
+        )
+
+    return reply
+
+
+def _records(blob=None):
+    return [{"id": n, "hostname": f"host-{n}", "connectivity": "online" if n % 2 else "offline", "blob": BLOB if blob is None else blob} for n in range(TOTAL)]
+
+
+def _routes(records):
+    every = {"totalCount": len(records), "currentPage": 1, "totalPages": 1, "dataCount": len(records), "data": records}
+    paged = _paged_api(records)
+    return {"incidents": paged, "events": paged, "agents": paged, "firewalls": paged, "apps": every}
+
+
+PAGED_TOOLS = [
+    ("rocketcyber_list_incidents", {}),
+    ("rocketcyber_list_events", {"appId": 7}),
+    ("rocketcyber_list_agents", {}),
+    ("rocketcyber_list_firewalls", {}),
+    ("rocketcyber_list_apps", {}),
+]
+
+
+async def _walk(monkeypatch, rec, tool, args):
+    """Follow next_offset until it ends; every result is checked for a retry hint."""
+    seen, calls = [], 0
+    result = await _call(monkeypatch, rec, tool, args)
+    while True:
+        calls += 1
+        assert calls < 100
+        seen += [r["id"] for r in result["data"]]
+        if "next_offset" in result:
+            assert "retry_page_size" not in result
+        if not result.get("next_offset"):
+            assert "next_offset" not in result and result["summary"]["has_more"] is False
+            return seen, calls
+        rest = {k: v for k, v in args.items() if k != "page"}
+        result = await _call(monkeypatch, rec, tool, {**rest, "offset": result["next_offset"]})
+
+
+@pytest.mark.parametrize("tool,base", PAGED_TOOLS)
+async def test_cut_pages_walked_by_next_offset_return_every_record_once(monkeypatch, tool, base):
+    rec = Recorder(_routes(_records()))
+    seen, calls = await _walk(monkeypatch, rec, tool, {**base, "pageSize": 25})
+    assert seen == list(range(TOTAL))
+    assert calls > TOTAL // 25 + 1  # pages really were cut
+
+
+@pytest.mark.parametrize("tool,base", PAGED_TOOLS)
+async def test_cut_pages_walked_from_a_later_page(monkeypatch, tool, base):
+    rec = Recorder(_routes(_records()))
+    seen, _ = await _walk(monkeypatch, rec, tool, {**base, "page": 3, "pageSize": 25})
+    assert seen == list(range(50, TOTAL))
+
+
+@pytest.mark.parametrize("tool,base", PAGED_TOOLS)
+@pytest.mark.parametrize("offset,page,ids", [(30, 2, range(30, 50)), (25, 2, range(25, 50)), (0, 1, range(25))])
+async def test_offset_reads_the_page_that_holds_it(monkeypatch, tool, base, offset, page, ids):
+    rec = Recorder(_routes(_records(blob="")))
+    result = await _call(monkeypatch, rec, tool, {**base, "pageSize": 25, "offset": offset})
+    assert [r["id"] for r in result["data"]] == list(ids)
+    assert result["offset"] == offset
+    assert result["next_offset"] == page * 25
+    assert result["summary"]["page"] == page
+    if tool != "rocketcyber_list_apps":
+        assert rec.params()["page"] == str(page) and rec.params()["pageSize"] == "25"
+
+
+@pytest.mark.parametrize("tool,base", PAGED_TOOLS)
+async def test_offset_past_the_end(monkeypatch, tool, base):
+    rec = Recorder(_routes(_records(blob="")))
+    result = await _call(monkeypatch, rec, tool, {**base, "pageSize": 25, "offset": 1000})
+    assert result["data"] == [] and result["summary"]["has_more"] is False and "next_offset" not in result
+
+
+@pytest.mark.parametrize("tool,base", PAGED_TOOLS)
+async def test_offset_wins_over_page(monkeypatch, tool, base):
+    rec = Recorder(_routes(_records(blob="")))
+    result = await _call(monkeypatch, rec, tool, {**base, "page": 1, "pageSize": 25, "offset": 60})
+    assert [r["id"] for r in result["data"]] == list(range(60, 75))
+    if tool != "rocketcyber_list_apps":
+        assert rec.params()["page"] == "3"
+
+
+@pytest.mark.parametrize(
+    "tool,base,expected",
+    [
+        ("rocketcyber_list_incidents", {}, {"sort": "createdAt:desc"}),
+        ("rocketcyber_list_events", {"appId": 7}, {"appId": "7"}),
+        ("rocketcyber_list_agents", {}, {}),
+        ("rocketcyber_list_firewalls", {}, {}),
+    ],
+)
+@pytest.mark.parametrize("paging,sent", [({"page": 2, "pageSize": 25}, {"page": "2", "pageSize": "25"}), ({}, {"pageSize": "25"})])
+async def test_page_only_call_sends_the_same_request(monkeypatch, tool, base, expected, paging, sent):
+    rec = Recorder(_routes(_records(blob="")))
+    result = await _call(monkeypatch, rec, tool, {**base, **paging})
+    assert rec.params() == {**expected, **sent}
+    first = (paging.get("page", 1) - 1) * 25
+    assert [r["id"] for r in result["data"]] == list(range(first, first + 25))
+    assert result["summary"]["next_page"] == paging.get("page", 1) + 1
+
+
+async def test_apps_page_only_call_unchanged(monkeypatch):
+    rec = Recorder(_routes(_records(blob="")))
+    result = await _call(monkeypatch, rec, "rocketcyber_list_apps", {"page": 2, "pageSize": 25})
+    assert rec.params() == {} and [r["id"] for r in result["data"]] == list(range(25, 50))
+    result = await _call(monkeypatch, rec, "rocketcyber_list_apps", {})
+    assert [r["id"] for r in result["data"]] == list(range(TOTAL)) and "next_offset" not in result
+
+
+@pytest.mark.parametrize(
+    "tool,base,keep",
+    [
+        ("rocketcyber_list_firewalls", {"hostname": "host-"}, lambda r: True),
+        ("rocketcyber_list_firewalls", {"connectivity": "online"}, lambda r: r["id"] % 2),
+        ("rocketcyber_list_events", {"appId": 7, "hostname": "host-1"}, lambda r: "host-1" in r["hostname"]),
+    ],
+)
+async def test_locally_filtered_cut_page_retries_from_the_same_offset(monkeypatch, tool, base, keep):
+    """A local filter makes returned positions non-consecutive: a cut page gives no next_offset
+    but retry_page_size, and retrying from the same offset with that page size loses nothing."""
+    records = _records()
+    rec = Recorder(_routes(records))
+    seen, offset, size, cut = [], 0, 25, False
+    for _ in range(200):
+        result = await _call(monkeypatch, rec, tool, {**base, "pageSize": size, "offset": offset})
+        if result.get("truncated"):
+            assert "next_offset" not in result
+            cut, size = True, result["retry_page_size"]
+            continue
+        seen += [r["id"] for r in result["data"]]
+        if "next_offset" not in result:
+            break
+        offset = result["next_offset"]
+    assert cut and seen == [r["id"] for r in records if keep(r)]
