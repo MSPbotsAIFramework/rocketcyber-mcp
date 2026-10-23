@@ -17,7 +17,6 @@ import json
 
 import httpx
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
 
 from rocketcyber_mcp import api_client
 from rocketcyber_mcp.api_client import (
@@ -181,9 +180,11 @@ async def test_events_need_app_id(monkeypatch):
     assert rec.requests == []
 
 
-async def test_bad_argument_type_still_raises(monkeypatch):
-    with pytest.raises(ToolError):
-        await _call(monkeypatch, Recorder(), "rocketcyber_list_events", {"appId": "not-a-number"})
+async def test_bad_argument_type_is_invalid_argument(monkeypatch):
+    rec = Recorder()
+    out = await _call(monkeypatch, rec, "rocketcyber_list_events", {"appId": "not-a-number"})
+    assert out["error"]["code"] == "invalid_argument" and "appId" in out["error"]["message"]
+    assert rec.requests == []
 
 
 def _page(items):
